@@ -2,6 +2,7 @@
 output_txt/
 photo_example/
 test_library/
+font/
 
 # Backup files #
 *.bak
