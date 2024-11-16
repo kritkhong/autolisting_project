@@ -4,6 +4,8 @@ from PIL import Image
 import PIL
 import re
 
+import csv  # temporary
+
 
 # Adjustable variable
 img_size = 500
@@ -42,21 +44,29 @@ def batch_resize_imgs(folder_path: PosixPath, img_size: int) -> PosixPath:
 
 def extract_info(item: PosixPath, code_prefix: str, ocr) -> dict:
     info = {'need_verify': False}
-    # caption = create_caption(item)
-    res = read_code_price(item, code_prefix, ocr)
-    print(res)
-    # info['code'] = code
-    # info['price'] = price
-    # info['caption'] = caption
-
+    # call read code and price function
+    cp_response = read_code_price(item, code_prefix, ocr)
+    print(cp_response)
+    code_list = cp_response[0]
+    price_list = cp_response[1]
+    caption = create_caption(item)
     # [ [code1] , [price] ]              1 code 1 price = OK
     # [ [code1,code2,code3] , [price] ]  multiple code with same price = OK
     # [ [...] , [price1, price2] ]       multiple price found = call for MANUAL
     # [ [] , [] ]                        no code or no price found = call for MANUAL
-    if (False):
-        info['need_verify'] = True
 
-    return info
+    # None value in any data point indicates that it needs human manual verification
+    if len(price_list) > 1 or len(price_list) == 0:
+        price_list = [None]
+    price = price_list[0]
+    if len(code_list) == 0:
+        code_list[0] = None
+
+    # return list of [code, caption, price]
+    info_list = []
+    for code in code_list:
+        info_list.append([code, caption, price])
+    return info_list
 
 
 def read_code_price(item: PosixPath, code_prefix: str, ocr) -> list:
@@ -67,13 +77,15 @@ def read_code_price(item: PosixPath, code_prefix: str, ocr) -> list:
         str_list.append(line[1][0])  # Now we get list of strings found
     code_list = []
     price_list = []
-    code_regex = r'[' + f'{code_prefix}' + r']\d{2,4}'
+    # Regex explain: 1 Alphabet follow by 01-09 , 10-9999
+    code_regex = r'([' + f'{code_prefix}' + r'](0[1-9]|[1-9]\d{1,3}))'
+    # Regex explain: (start of str / = / space)(2-5 digits number can have ',' separator) <-- use this one
     price_regex = r'(^|=|\s)(\d{0,2},?\d{2,3})'
     for str in str_list:
-        code_list.extend(re.findall(code_regex, str))
-        for groups in re.findall(price_regex, str):
-            price_list.append(groups[1])
-
+        for res_group in re.findall(code_regex, str):
+            code_list.append(res_group[0])
+        for res_group in re.findall(price_regex, str):
+            price_list.append(res_group[1])
     # return in list of list
     # [ [code1,code2,...] , [price, ...] ]]
     return [code_list, price_list]
@@ -82,20 +94,22 @@ def read_code_price(item: PosixPath, code_prefix: str, ocr) -> list:
 def create_caption(item: PosixPath) -> str:
     # using AI this always came out with something
     # just put something in front of string if not sure
-    pass
+    return 'some caption'
 
 
 # main function
 ocr = PaddleOCR(lang='en')
 imgs_dir = batch_resize_imgs(dir_path, img_size)
-for img in imgs_dir.iterdir():
-    info = extract_info(img, code_prefix, ocr)
-    if (info['need_verify']):
-        pass
+with open(f'{dir_path}/csv_test_output.csv', 'w') as file:
+    csv_writer = csv.writer(file)
+    csv_writer.writerow(['Code', 'Product Caption', 'Price'])
+    for img in imgs_dir.iterdir():
+        info = extract_info(img, code_prefix, ocr)
+        csv_writer.writerows(info)
+
         # raname
         # may be save file to subfolder 'manual needs' with some name then run through each item again at the end of all process using img show and prompt for human work
-    else:
-        pass
+
         # rename to code .jpg
 
         ############ THIS TO SAVE NEW FILE WITH OCR DETECTION #############
@@ -108,10 +122,5 @@ for img in imgs_dir.iterdir():
         # im_show = Image.fromarray(im_show)
         # im_show.save(f'{result_folder}/{item.stem}_ocr.jpg')
         # ##############################################################
-
-        #       extract code from image, price ->  item_info <-----------***** how to indicate RegEx?
-        #       rename img to code
-        #       use chatgpt vision to write a caption <-----------***** think about the prompt
-        #       write item_info to xlsx file
 
         # ________DONE FOR NOW_________
