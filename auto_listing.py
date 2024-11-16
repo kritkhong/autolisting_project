@@ -1,7 +1,9 @@
+from pathlib import Path, PosixPath
 from paddleocr import PaddleOCR, draw_ocr
 from PIL import Image
 import PIL
-from pathlib import Path, PosixPath
+import re
+
 
 # Adjustable variable
 img_size = 500
@@ -13,6 +15,10 @@ while (True):
         break
     else:
         print('Path doesn\'t exist. Please check the address or path format or any typos.')
+code_prefix = input(
+    'Please specify the LETTER(s) code for more accuracy [if not just press \'Enter\']: ')
+code_prefix = 'A-Z' if code_prefix == '' else code_prefix.upper()
+print(code_prefix)
 
 
 # resize entire folder of image and save to jpg format (acceptable format for chatGpt) return path of the result folder
@@ -34,27 +40,43 @@ def batch_resize_imgs(folder_path: PosixPath, img_size: int) -> PosixPath:
 # extract info from each images return dictionary
 
 
-def extract_info(item: PosixPath) -> dict:
+def extract_info(item: PosixPath, code_prefix: str, ocr) -> dict:
     info = {'need_verify': False}
-    caption = create_caption(item)
-    (code, price) = read_code_price(item)
-    info['code'] = code
-    info['price'] = price
-    info['caption'] = caption
+    # caption = create_caption(item)
+    res = read_code_price(item, code_prefix, ocr)
+    print(res)
+    # info['code'] = code
+    # info['price'] = price
+    # info['caption'] = caption
 
-    # how to indicate file that need human manual read  *******
-    if ():
+    # [ [code1] , [price] ]              1 code 1 price = OK
+    # [ [code1,code2,code3] , [price] ]  multiple code with same price = OK
+    # [ [...] , [price1, price2] ]       multiple price found = call for MANUAL
+    # [ [] , [] ]                        no code or no price found = call for MANUAL
+    if (False):
         info['need_verify'] = True
 
     return info
 
 
-def read_code_price(item: PosixPath) -> tuple:
-    # something using Regex
-    # Multiple codes
-    # code not found
-    # price not found
-    pass
+def read_code_price(item: PosixPath, code_prefix: str, ocr) -> list:
+    text_read = ocr.ocr(f'{item}', cls=False)
+    text_read = text_read[0]
+    str_list = []
+    for line in text_read:
+        str_list.append(line[1][0])  # Now we get list of strings found
+    code_list = []
+    price_list = []
+    code_regex = r'[' + f'{code_prefix}' + r']\d{2,4}'
+    price_regex = r'(^|=|\s)(\d{0,2},?\d{2,3})'
+    for str in str_list:
+        code_list.extend(re.findall(code_regex, str))
+        for groups in re.findall(price_regex, str):
+            price_list.append(groups[1])
+
+    # return in list of list
+    # [ [code1,code2,...] , [price, ...] ]]
+    return [code_list, price_list]
 
 
 def create_caption(item: PosixPath) -> str:
@@ -64,22 +86,17 @@ def create_caption(item: PosixPath) -> str:
 
 
 # main function
-ocr = PaddleOCR(lang='en')  # need to run only once to load model into memory
+ocr = PaddleOCR(lang='en')
 imgs_dir = batch_resize_imgs(dir_path, img_size)
 for img in imgs_dir.iterdir():
-    res = extract_info(img)
-    if (res['need_verify']):
+    info = extract_info(img, code_prefix, ocr)
+    if (info['need_verify']):
         pass
         # raname
         # may be save file to subfolder 'manual needs' with some name then run through each item again at the end of all process using img show and prompt for human work
     else:
+        pass
         # rename to code .jpg
-
-        # result = ocr.ocr(output_name, cls=False)
-        # result = result[0]
-        # print(f'------------------{item.stem}---------------------')
-        # for line in result:
-        #     print(line)
 
         ############ THIS TO SAVE NEW FILE WITH OCR DETECTION #############
         # image = Image.open(output_name).convert('RGB')
