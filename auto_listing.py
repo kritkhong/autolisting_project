@@ -2,6 +2,7 @@
 import PIL
 import re
 import base64
+import json
 from pathlib import Path
 from paddleocr import PaddleOCR, draw_ocr
 from PIL import Image
@@ -52,7 +53,6 @@ def extract_info(item: Path, code_prefix: str, ocr) -> dict:
     print(cp_response)
     code_list = cp_response[0]
     price_list = cp_response[1]
-    caption = create_caption(item)
 
     # [ [code1] , [price] ]              1 code 1 price = OK
     # [ [code1,code2,code3] , [price] ]  multiple code with same price = OK
@@ -67,10 +67,15 @@ def extract_info(item: Path, code_prefix: str, ocr) -> dict:
         code_list = [None]
 
     # return list of [code, caption, price]
-    info_list = []
-    for code in code_list:
-        info_list.append([code, caption, price])
-    return info_list
+    if len(code_list) > 1:
+        captions = multi_captions(item, code_list)
+        info_list = []
+        for code in code_list:
+            info_list.append([code, captions[code], price])
+        return info_list
+    else:
+        caption = single_caption(item)
+        return [[code_list[0], caption, price]]
 
 
 def read_code_price(item: Path, code_prefix: str, ocr) -> list:
@@ -95,7 +100,7 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
     return [code_list, price_list]
 
 
-def create_caption(item: Path) -> str:
+def single_caption(item: Path) -> str:
     img_path = str(item)
     with open(img_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
@@ -111,7 +116,7 @@ def create_caption(item: Path) -> str:
                 "content": [
                     {
                         "type": "text",
-                        "text": "Your duty is product captioning. \nMy products are mainly Disneyland and Disney's store products and some other store's product that fall in the same category such as gift ,souvenir that have cartoon or fantasy character design, sometime there are other kind of product too, you can caption this kind as you see proper.\nHow this work is\nI will send you the image of the product. You only return the caption phrase (in Thai language), not a sentence.\nThe caption phrase have a brief structure as below:\n1. Type of product\n2. Color of product (if have multiple indicates a few main ones)\n3. Design or print on product : this part can be what character, color of that character, pattern, color of pattern, special texture etc as you see proper.\n\nfor example: กระติกน้ำเก็บอุณหภูมิสีแดง รูป Mickey Mouse ใส่ชุดสีน้ำเงิน\nnotes:\n- Sometimes, there is a hint of product type in the picture as a text in Thai.\n- You can name character in English\n- If picture have same product with several design,explain the product first and list all the different designs\n- We have some usual products, use these words: \n'พวง ตต ' is plush keychain (small doll with keyring), \n'ตต ' is plush doll (relatively bigger dool),\n'กระเป๋าเหรียญ' is small pocket with keyring, can be plush keyring with zip pocket\n"
+                        "text": "Your duty is product captioning. \nMy products are mainly Disneyland and Disney's store products and some other store's product that fall in the same category such as gift ,souvenir that have cartoon or fantasy character design, sometime there are other kind of product too, you can caption this kind as you see proper.\nHow this work is\nI will send you the image of the product. You only return the caption phrase (in Thai language), not a sentence.\nThe caption phrase have a brief structure as below:\n1. Type of product\n2. Color of product (if have multiple indicates a few main ones)\n3. Design or print on product : this part can be what character, color of that character, pattern, color of pattern, special texture etc as you see proper.\n\nfor example: กระติกน้ำเก็บอุณหภูมิสีแดง รูป Mickey Mouse ใส่ชุดสีน้ำเงิน\nnotes:\n- Sometimes, there is a hint of product type in the picture as a text in Thai.\n- You can name character in English\n- We have some usual products, use these words: \n'พวง ตต ' is plush keychain (small doll with keyring), \n'ตต ' is plush doll (relatively bigger dool),\n'กระเป๋าเหรียญ' is small pocket with keyring, can be plush keyring with zip pocket\n"
                     }
                 ]
             },
@@ -136,7 +141,65 @@ def create_caption(item: Path) -> str:
             "type": "text"
         }
     )
-    return response.choices[0].message.content
+    caption = response.choices[0].message.content
+    print(caption)
+    return caption
+
+
+def multi_captions(item: Path, code_list: list) -> dict:
+    img_path = str(item)
+    with open(img_path, "rb") as image_file:
+        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+
+    env_vars = dotenv_values('.env')
+
+    client = OpenAI(api_key=env_vars['OPEN_AI_KEY'])
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Your duty is product captioning. \nMy products are mainly Disneyland and Disney's store products and some other store's product that fall in the same category such as gift ,souvenir that have cartoon or fantasy character design, sometime there are other kind of product too, you can caption this kind as you see proper.\nHow this work is\nI will send you the image of the product and list(array) contain product label code that label on the image.\nYou only return in raw JSON string of input product label code as a key and the caption phrase (in Thai language) as a value.\nIf my input is wrong, please explain the error in english uppercase in the caption.\nfor example:  input = ['A05','K034','A28'] \noutput = { \"A05\": caption#1, \"K034\": caption#2, \"A28\": \"NOT FOUND**\"}\nThe caption phrase have a brief structure as below:\n1. Type of product\n2. Color of product (if have multiple indicates a few main ones)\n3. Design or print on product : this part can be what character, color of that character, pattern, color of pattern, special texture etc as you see proper.\n\nfor example: กระติกน้ำเก็บอุณหภูมิสีแดง รูป Mickey Mouse ใส่ชุดสีน้ำเงิน\nnotes:\n- Sometimes, there is a hint of product type in the picture as a text in Thai.\n- You can name character in English\n- We have some usual products, use these words: \n'พวง ตต ' is plush keychain (small doll with keyring), \n'ตต ' is plush doll (relatively bigger dool),\n'กระเป๋าเหรียญ' is small pocket with keyring, can be plush keyring with zip pocket"
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": str(code_list)
+                    }
+                ]
+            },
+        ],
+        temperature=1,
+        max_tokens=1000,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0,
+        response_format={
+            "type": "text"
+        }
+    )
+    str_response = json_trim(response.choices[0].message.content)
+    print(str_response)
+    return json.loads(str_response)
+
+
+def json_trim(string: str) -> str:
+    regex = r'[{\[].*[}\]]'
+    match = re.search(regex, string, re.DOTALL)
+    return match.group()
 
 
 # main function
