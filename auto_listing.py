@@ -3,17 +3,25 @@ import PIL
 import re
 import base64
 import json
+import shutil
+from collections import deque
+from datetime import datetime
 from pathlib import Path
 from paddleocr import PaddleOCR, draw_ocr
 from PIL import Image
 from dotenv import dotenv_values
 from openai import OpenAI
+from openpyxl import load_workbook
 
 import csv  # temporary
 
 
 # Adjustable variable
 img_size = 500
+stock_name = 'CN_JUN'  # stock_code = f'{stock_name}{stock_no:04}'
+stock_no = 1
+item_count = 10
+price_check = 3000  # if price is suspiciously high call for manual check
 
 # User's input
 while (True):
@@ -24,13 +32,11 @@ while (True):
         print('Path doesn\'t exist. Please check the address or path format or any typos.')
 code_prefix = input(
     'Please specify the LETTER(s) code for more accuracy [if not just press \'Enter\']: ')
-code_prefix = 'A-Z' if code_prefix == '' else code_prefix.upper()
-print(code_prefix)
 
 
 # resize entire folder of image and save to jpg format (acceptable format for chatGpt) return path of the result folder
 def batch_resize_imgs(folder_path: Path, img_size: int) -> Path:
-    result_folder = folder_path / 'resized_imgs'
+    result_folder = folder_path / 'result'
     result_folder.mkdir(exist_ok=True)
     for item in folder_path.iterdir():
         try:
@@ -44,10 +50,9 @@ def batch_resize_imgs(folder_path: Path, img_size: int) -> Path:
         resized_img.save(output_name)
     return result_folder
 
-# extract info from each images return dictionary
 
-
-def extract_info(item: Path, code_prefix: str, ocr) -> dict:
+# extract info from each images return return list of [code, caption, price]
+def extract_info(item: Path, code_prefix: str, ocr) -> list:
     # call read code and price function
     cp_response = read_code_price(item, code_prefix, ocr)
     print(cp_response)
@@ -86,6 +91,8 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
         str_list.append(line[1][0])  # Now we get list of strings found
     code_list = []
     price_list = []
+    # if code prefix is not specified make it to A-Z
+    code_prefix = 'A-Z' if code_prefix == '' else code_prefix.upper()
     # Regex explain: 1 Alphabet follow by 01-09 , 10-9999
     code_regex = r'([' + f'{code_prefix}' + r'](0[1-9]|[1-9]\d{1,3}))'
     # Regex explain: (start of str / = / space)(2-5 digits number can have ',' separator) <-- use this one
@@ -202,30 +209,95 @@ def json_trim(string: str) -> str:
     return match.group()
 
 
+def img_rename(img: Path, info_list: list) -> str:
+    list = []
+    for info in info_list:
+        list.append(info[0])
+    new_name = str(img.parent / ('_'.join(list) + img.suffix))
+    img.rename(new_name)
+    return new_name
+
+
 # main function
 ocr = PaddleOCR(lang='en')
+# batch_resize_imgs return path of the result folder
 imgs_dir = batch_resize_imgs(dir_path, img_size)
-with open(f'{dir_path}/csv_test_output.csv', 'w') as file:
-    csv_writer = csv.writer(file)
-    csv_writer.writerow(['Code', 'Product Caption', 'Price'])
-    for img in imgs_dir.iterdir():
-        info = extract_info(img, code_prefix, ocr)
-        csv_writer.writerows(info)
 
-        # raname
-        # may be save file to subfolder 'manual needs' with some name then run through each item again at the end of all process using img show and prompt for human work
+# with open(f'{dir_path}/csv_test_output.csv', 'w') as file:
+#     csv_writer = csv.writer(file)
+#     csv_writer.writerow(['Code', 'Product Caption', 'Price'])
+#     for img in imgs_dir.iterdir():
+#         info_list = extract_info(img, code_prefix, ocr)
+#         csv_writer.writerows(info_list)
+#         # rename image
+#         img_rename(img, info_list)
 
-        # rename to code .jpg
+path_temp_xls = Path('./stock_template.xlsx')
+path_result_xls = imgs_dir / \
+    ('stock_' + datetime.now().strftime(r'%d%m%y_%H%M%S') + '.xlsx')
+shutil.copy(path_temp_xls, path_result_xls)
 
-        ############ THIS TO SAVE NEW FILE WITH OCR DETECTION #############
-        # image = Image.open(output_name).convert('RGB')
-        # boxes = [line[0] for line in result]
-        # txts = [line[1][0] for line in result]
-        # scores = [line[1][1] for line in result]
-        # im_show = draw_ocr(image, boxes, txts, scores,
-        #                    font_path='/Users/krit/Desktop/cs/project/autolisting/font/simfang.ttf')
-        # im_show = Image.fromarray(im_show)
-        # im_show.save(f'{result_folder}/{item.stem}_ocr.jpg')
-        # ##############################################################
+# EXCEL PART
+wb = load_workbook(path_result_xls)
+ws = wb.active
+check_needed = deque()
+for img in imgs_dir.iterdir():
+    if (img.suffix == '.xlsx'):
+        continue
+    info_list = extract_info(img, code_prefix, ocr)
+    img_name = img_rename(img, info_list)  # rename image to sale code
 
-        # ________DONE FOR NOW_________
+    for info in info_list:
+        # stock_name is hard coded for sake of testing you can make it user input
+        stock_code = f'{stock_name}{stock_no:04}'
+        # A:stock_code B:sale_code C:caption E:count(default=10) F:price
+        row_val = {
+            'A': stock_code,
+            'B': info[0],
+            'C': info[1],
+            'E': item_count,
+            'F': info[2],
+        }
+        ws.append(row_val)
+        stock_no += 1
+        check_info = {
+            'row': ws.max_row,
+            'col': [],
+            'img': img_name
+        }
+        # check to see if this row need manual work
+        if row_val['B'] == None:
+            check_info["col"].append('B')
+        if row_val['F'] == None or int(row_val['F']) > price_check:
+            check_info["col"].append('F')
+        # if manual needed put it queue
+        if len(check_info["col"] > 0):
+            check_needed.append(check_info)
+            # TODO
+            # if GUI not running ----> run it
+            gui_check()
+            # let user check while automation is running
+
+
+wb.save(path_result_xls)
+
+# Now implement this csv to template xlsx
+'''
+    What tpe of info require manual work
+    for now
+    1. No price
+    2. No code
+
+    to consider
+    1. Multi-caption
+    2. Too expensive? >2,000
+    '''
+# if the img need Manual work in GUI as condition above
+# Create manual work LIST might contain ---> file_path, info_list, position in xlsx
+# skip renaming? if no code
+# Queue the human work in LIST?
+# Show img in GUI with highlight what's need attention
+# back to rename
+# edit xlsx
+
+# ________DONE FOR NOW_________
