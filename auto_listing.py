@@ -94,21 +94,40 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
             str_list.append(line[1][0])  # Now we get list of strings found
         # if code prefix is not specified make it to A-Z
         code_prefix = 'A-Z' if code_prefix == '' else code_prefix.upper()
-        # Regex explain: 1 Alphabet follow by 01-09 , 10-9999
-        code_regex = r'([' + f'{code_prefix}' + r'](0[1-9]|[1-9]\d{1,3}))'
-        # Regex explain: (start of str / = / space)(2-5 digits number can have ',' separator) <-- use this one
-        price_regex = r'(^|=|\s)(\d{0,2},?\d{2,3})'
+        # Regex explain: 1 Alphabet follow by 01-09 , 10-999
+        code_regex = r'([' + f'{code_prefix}' + r'](0[1-9]|[1-9]\d{1,2}))'
+        # Regex explain: (3-4 digits number) note: 2 digits make many noises e.g. size, model
+        price_regex = r'([1-9]\d{2,3})'
+        # often time when Thai language appear the ocr just ignore the Thai and concat text without white space example "A29 กระเป๋า 590" output = "A29590"
+        # this pattern use often by this store
+        concat_bug_regex = r'([' + f'{code_prefix}' + \
+            r'](0[1-9]|[1-9]\d{1,2}))[a-zA-Z\s=]*([1-9]\d{2,3})'
         for str in str_list:
-            for res_group in re.findall(code_regex, str):
-                code_list.append(res_group[0])
-            for res_group in re.findall(price_regex, str):
-                price_list.append(res_group[1])
+            match = re.findall(concat_bug_regex, str)
+            # if match special case no need to match each code and price case
+            if match:
+                for group in match:
+                    code_list.append(group[0])
+                    price_list.append(group[2])
+            # else match code first of match means it's not a price
+            else:
+                match = re.findall(code_regex, str)
+                if match:
+                    for group in match:
+                        code_list.append(group[0])
+                else:
+                    for group in re.findall(price_regex, str):
+                        price_list.append(group)
         # return in list of list
         # [ [code1,code2,...] , [price, ...] ]]
     return [code_list, price_list]
 
 
 def single_caption(item: Path) -> str:
+    ##### FOR TESTING #####
+    return "--test caption--"
+    #######################
+
     img_path = str(item)
     with open(img_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
@@ -155,6 +174,12 @@ def single_caption(item: Path) -> str:
 
 
 def multi_captions(item: Path, code_list: list) -> dict:
+    ##### FOR TESTING #####
+    test_dict = {}
+    for code in code_list:
+        test_dict[code] = "--test caption--"
+    return test_dict
+    #######################
     img_path = str(item)
     with open(img_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
@@ -223,18 +248,9 @@ def img_rename(img: Path, info_list: list) -> str:
 
 
 # main function
-ocr = PaddleOCR(lang='en')
+ocr = PaddleOCR(lang='en', use_dilation=True)
 # batch_resize_imgs return path of the result folder
 imgs_dir = batch_resize_imgs(dir_path, img_size)
-
-# with open(f'{dir_path}/csv_test_output.csv', 'w') as file:
-#     csv_writer = csv.writer(file)
-#     csv_writer.writerow(['Code', 'Product Caption', 'Price'])
-#     for img in imgs_dir.iterdir():
-#         info_list = extract_info(img, code_prefix, ocr)
-#         csv_writer.writerows(info_list)
-#         # rename image
-#         img_rename(img, info_list)
 
 path_temp_xls = Path('./stock_template.xlsx')
 path_result_xls = imgs_dir / \
