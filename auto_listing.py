@@ -4,11 +4,12 @@ import re
 import base64
 import json
 import shutil
+import math
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 from paddleocr import PaddleOCR, draw_ocr
-from PIL import Image
+from PIL import Image, ImageDraw
 from dotenv import dotenv_values
 from openai import OpenAI
 from openpyxl import load_workbook
@@ -54,45 +55,30 @@ def batch_resize_imgs(folder_path: Path, img_size: int) -> Path:
 # extract info from each images return return list of [code, caption, price]
 def extract_info(item: Path, code_prefix: str, ocr) -> list:
     # call read code and price function
-    cp_response = read_code_price(item, code_prefix, ocr)
-    print(cp_response)
-    code_list = cp_response[0]
-    price_list = cp_response[1]
-
-    # [ [code1] , [price] ]              1 code 1 price = OK
-    # [ [code1,code2,code3] , [price] ]  multiple code with same price = OK
-    # [ [...] , [price1, price2] ]       multiple price found = call for MANUAL
-    # [ [] , [] ]                        no code or no price found = call for MANUAL
-
-    # None value in any data point indicates that it needs human manual verification
-    if len(price_list) > 1 or len(price_list) == 0:
-        price_list = [None]
-    price = price_list[0]
-    if len(code_list) == 0:
-        code_list = [None]
-
+    cp_list = read_code_price(item, code_prefix, ocr)
+    print(cp_list)
     # return list of [code, caption, price]
-    if len(code_list) > 1:
-        captions = multi_captions(item, code_list)
-        info_list = []
-        for code in code_list:
-            info_list.append([code, captions[code], price])
-        return info_list
-    else:
+    info_list = []
+    if len(cp_list) == 0:
+        info_list.append([None for _ in range(3)])
+    elif len(cp_list) == 1:
         caption = single_caption(item)
-        return [[code_list[0], caption, price]]
+        info_list.append([cp_list[0][0], caption, cp_list[0][1]])
+
+    elif len(cp_list) > 1:
+        captions = multi_captions(item, [cp[0] for cp in cp_list])
+        info_list = []
+        for code, price in cp_list:
+            info_list.append([code, captions[code], price])
+    return info_list
 
 
 def read_code_price(item: Path, code_prefix: str, ocr) -> list:
     text_read = ocr.ocr(f'{item}', cls=False)
     text_read = text_read[0]
-    str_list = []
     code_list = []
     price_list = []
     if (text_read):
-        for line in text_read:
-            str_list.append(line[1][0])  # Now we get list of strings found
-        print(str_list)
         # if code prefix is not specified make it to A-Z
         code_prefix = 'A-Z' if code_prefix == '' else code_prefix.upper()
         # Regex explain: 1 Alphabet follow by 01-09 , 10-9999
@@ -101,14 +87,16 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
             r']([0O][1-9]|[1-9][O\d]{1,3}))'
         # Regex explain: (start of str / = / space)(3-5 digits number not start with 0)
         price_regex = r'([1-9]\d{2,3})'
-        for str in str_list:
+        for line in text_read:
+            box_loc = line[0]
+            str = line[1][0]
             # Extract code
             while (True):
                 match = re.search(code_regex, str)
                 if (match == None):
                     break
                 # append the code if have letter O replace with 0
-                code_list.append(re.sub('O', '0', match.group(0)))
+                code_list.append([box_loc, re.sub('O', '0', match.group(0))])
                 # trim that code out of the string
                 str = str[:match.start()] + ' ' + str[match.end():]
             # Extract price
@@ -117,13 +105,57 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
                 if (match == None):
                     break
                 # append the code if have letter O replace with 0
-                price_list.append(match.group())
+                price_list.append([box_loc, match.group()])
                 # trim that code out of the string
                 str = str[:match.start()] + ' ' + str[match.end():]
+    for box, price in price_list:
+        draw_box(box, 'PRICE', (3, 252, 15), item)
 
-        # return in list of list
-        # [ [code1,code2,...] , [price, ...] ]]
-    return [code_list, price_list]
+    # one code
+    # multiple code
+    output = []
+    for box_c, code in code_list:
+        draw_box(box_c, 'CODE', (3, 252, 252), item)
+        x1 = [p[0] for p in box_c]
+        y1 = [p[1] for p in box_c]
+        code_center = [sum(x1)/4, sum(y1)/4]
+        min_dist = float('inf')
+        pair_price = []
+        for box_p, price in price_list:
+            x2 = [p[0] for p in box_p]
+            y2 = [p[1] for p in box_p]
+            price_center = [sum(x2)/4, sum(y2)/4]
+            distance = math.dist(code_center, price_center)
+            if distance < min_dist:
+                min_dist = distance
+                pair_price = [price_center, price]
+        draw_line(code_center, pair_price[0], item)
+        output.append([code, pair_price[1]])
+
+    # return in list of [code, price]
+    # [ [code1,price1], [code2,price2], ... ]
+    return output
+
+
+def draw_box(box: list, text: str, color: tuple, img: Path):
+    with Image.open(img) as im:
+        draw = ImageDraw.Draw(im)
+        draw.text([box[0][0], box[0][1]-15], text, fill=color,
+                  font_size=12, stroke_width=1, stroke_fill=(0, 0, 0))
+        draw.line(box[0]+box[1], fill=color, width=1)
+        draw.line(box[1]+box[2], fill=color, width=1)
+        draw.line(box[2]+box[3], fill=color, width=1)
+        draw.line(box[3]+box[0], fill=color, width=1)
+        im.save(img)
+        return 1
+
+
+def draw_line(a: list, b: list, img: Path):
+    with Image.open(img) as im:
+        draw = ImageDraw.Draw(im)
+        draw.line(a+b, fill=(252, 3, 227, 128), width=1)
+        im.save(img)
+        return 1
 
 
 def single_caption(item: Path) -> str:
