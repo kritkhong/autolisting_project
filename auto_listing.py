@@ -96,14 +96,31 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
         # if code prefix is not specified make it to A-Z
         code_prefix = 'A-Z' if code_prefix == '' else code_prefix.upper()
         # Regex explain: 1 Alphabet follow by 01-09 , 10-9999
-        code_regex = r'([' + f'{code_prefix}' + r'](0[1-9]|[1-9]\d{1,3}))'
+        # sometimes ocr got confused between O(letter) and 0(number)
+        code_regex = r'([' + f'{code_prefix}' + \
+            r']([0O][1-9]|[1-9][O\d]{1,3}))'
         # Regex explain: (start of str / = / space)(3-5 digits number not start with 0)
-        price_regex = r'(^|=|\s)([1-9]\d{2,3})'
+        price_regex = r'([1-9]\d{2,3})'
         for str in str_list:
-            for res_group in re.findall(code_regex, str):
-                code_list.append(res_group[0])
-            for res_group in re.findall(price_regex, str):
-                price_list.append(res_group[1])
+            # Extract code
+            while (True):
+                match = re.search(code_regex, str)
+                if (match == None):
+                    break
+                # append the code if have letter O replace with 0
+                code_list.append(re.sub('O', '0', match.group(0)))
+                # trim that code out of the string
+                str = str[:match.start()] + ' ' + str[match.end():]
+            # Extract price
+            while (True):
+                match = re.search(price_regex, str)
+                if (match == None):
+                    break
+                # append the code if have letter O replace with 0
+                price_list.append(match.group())
+                # trim that code out of the string
+                str = str[:match.start()] + ' ' + str[match.end():]
+
         # return in list of list
         # [ [code1,code2,...] , [price, ...] ]]
     return [code_list, price_list]
