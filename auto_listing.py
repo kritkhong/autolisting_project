@@ -6,6 +6,7 @@ import json
 import shutil
 import math
 from collections import deque
+from natsort import natsorted
 from datetime import datetime
 from pathlib import Path
 from paddleocr import PaddleOCR, draw_ocr
@@ -13,6 +14,7 @@ from PIL import Image, ImageDraw
 from dotenv import dotenv_values
 from openai import OpenAI
 from openpyxl import load_workbook
+
 
 import csv  # temporary
 
@@ -52,28 +54,23 @@ def batch_resize_imgs(folder_path: Path, img_size: int) -> Path:
     return result_folder
 
 
-# extract info from each images return return list of [code, caption, price]
-def extract_info(item: Path, code_prefix: str, ocr) -> list:
-    # call read code and price function
-    cp_list = read_code_price(item, code_prefix, ocr)
-    print(cp_list)
-    # return list of [code, caption, price]
-    info_list = []
-    if len(cp_list) == 0:
-        info_list.append([None for _ in range(3)])
-    elif len(cp_list) == 1:
+def create_caption(item: Path, code_list: list) -> list:
+    output = {}
+    if len(code_list) == 1:
         caption = single_caption(item)
-        info_list.append([cp_list[0][0], caption, cp_list[0][1]])
+        output[code_list[0]] = caption
 
-    elif len(cp_list) > 1:
-        captions = multi_captions(item, [cp[0] for cp in cp_list])
-        info_list = []
-        for code, price in cp_list:
-            info_list.append([code, captions[code], price])
-    return info_list
+    elif len(code_list) > 1:
+        captions = multi_captions(item, code_list)
+        for code in code_list:
+            try:
+                output[code] = captions[code]
+            except:
+                output[code] = '*** Caption Create Error ***'
+    return output
 
 
-def read_code_price(item: Path, code_prefix: str, ocr) -> list:
+def read_code_price(item: Path, code_prefix: str, ocr, draw=False) -> list:
     text_read = ocr.ocr(f'{item}', cls=False)
     text_read = text_read[0]
     code_list = []
@@ -108,14 +105,16 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
                 price_list.append([box_loc, match.group()])
                 # trim that code out of the string
                 str = str[:match.start()] + ' ' + str[match.end():]
-    for box, price in price_list:
-        draw_box(box, 'PRICE', (3, 252, 15), item)
+    if draw:
+        for box, price in price_list:
+            draw_box(box, 'PRICE', (3, 252, 15), item)
 
     # one code
     # multiple code
     output = []
     for box_c, code in code_list:
-        draw_box(box_c, 'CODE', (3, 252, 252), item)
+        if draw:
+            draw_box(box_c, 'CODE', (3, 252, 252), item)
         x1 = [p[0] for p in box_c]
         y1 = [p[1] for p in box_c]
         code_center = [sum(x1)/4, sum(y1)/4]
@@ -129,7 +128,8 @@ def read_code_price(item: Path, code_prefix: str, ocr) -> list:
             if distance < min_dist:
                 min_dist = distance
                 pair_price = [price_center, price]
-        draw_line(code_center, pair_price[0], item)
+        if draw:
+            draw_line(code_center, pair_price[0], item)
         output.append([code, pair_price[1]])
 
     # return in list of [code, price]
@@ -270,79 +270,100 @@ def json_trim(string: str) -> str:
     return match.group()
 
 
-def img_rename(img: Path, info_list: list) -> str:
-    list = []
-    for info in info_list:
-        list.append(info[0])
+def img_rename(img: Path, code_list: list) -> dict:
+    list = natsorted(code_list)
+    duplicated = False
     if (list[0]):
-        new_name = str(img.parent / ('_'.join(list) + img.suffix))
+        new_img = img.parent / ('_'.join(list) + img.suffix)
     else:
-        new_name = str(img)
-    img.rename(new_name)
-    return new_name
+        new_img = img
+    if new_img.exists():
+        new_img = new_img.parent / (new_img.stem + '_dup' + new_img.suffix)
+        duplicated = True
+    img.rename(str(new_img))
+    return_val = {
+        'path': new_img,
+        'duplicated': duplicated,
+    }
+    return return_val
 
 
-# main function
+## MAIN FUCTION ##
+
 ocr = PaddleOCR(lang='en', show_log=False)
-'''
-force PaddleOCR to use det_lang='ml'
-see pddleocr.py line 646
-'''
+##########################################
+## force PaddleOCR to use det_lang='ml' ##
+## see paddleocr.py line 646            ##
+##########################################
+
 # batch_resize_imgs return path of the result folder
 imgs_dir = batch_resize_imgs(dir_path, img_size)
+listing = []
+for img in imgs_dir.iterdir():
+    print(img)
+    if (img.suffix == '.xlsx'):
+        continue
 
+    cp_list = read_code_price(img, code_prefix, ocr, draw=True)
+    code_list = [code for code, price in cp_list]
+    # image have code(s) --> rename img, create caption(s), put info in listing
+    if cp_list:
+        rename = img_rename(img, code_list)
+        img = rename['path']
+        if not rename['duplicated']:
+            caption_dict = create_caption(img, code_list)
+            for code, price in cp_list:
+                listing.append([code, caption_dict[code], price])
+    # image doesn't contain code --> ignore
+    else:
+        continue
+
+# EXCEL PART
 path_temp_xls = Path('./stock_template.xlsx')
 path_result_xls = imgs_dir / \
     ('stock_' + datetime.now().strftime(r'%d%m%y_%H%M%S') + '.xlsx')
 shutil.copy(path_temp_xls, path_result_xls)
 
-# EXCEL PART
 wb = load_workbook(path_result_xls)
 ws = wb.active
-check_needed = deque()
-for img in imgs_dir.iterdir():
-    print(img)
-    if (img.suffix == '.xlsx'):
-        continue
-    info_list = extract_info(img, code_prefix, ocr)
-    img_name = img_rename(img, info_list)  # rename image to sale code
 
-    for info in info_list:
-        # stock_name is hard coded for sake of testing you can make it user input
-        stock_code = f'{stock_name}{stock_no:04}'
-        # A:stock_code B:sale_code C:caption E:count(default=10) F:price
-        row_val = {
-            'A': stock_code,
-            'B': info[0],
-            'C': info[1],
-            'E': item_count,
-            'F': info[2],
-        }
-        ws.append(row_val)
-        stock_no += 1
+listing = natsorted(listing, key=lambda y: y[0])
 
-        # check_info = {
-        #     'row': ws.max_row,
-        #     'col': [],
-        #     'img': img_name
-        # }
-        # # check to see if this row need manual work
-        # if row_val['B'] == None:
-        #     check_info["col"].append('B')
-        # if row_val['F'] == None or int(row_val['F']) > price_check:
-        #     check_info["col"].append('F')
-        # # if manual needed put it queue
-        # if len(check_info["col"] > 0):
-        #     check_needed.append(check_info)
-        #     # TODO
-        #     # if GUI not running ----> run it
-        #     gui_check()
-        #     # let user check while automation is running
+for info in listing:
+    # stock_name is hard coded for sake of testing you can make it user input
+    stock_code = f'{stock_name}{stock_no:04}'
+    # A:stock_code B:sale_code C:caption E:count(default=10) F:price
+    row_val = {
+        'A': stock_code,
+        'B': info[0],
+        'C': info[1],
+        'E': item_count,
+        'F': info[2],
+    }
+    ws.append(row_val)
+    stock_no += 1
+
+    # check_info = {
+    #     'row': ws.max_row,
+    #     'col': [],
+    #     'img': img_name
+    # }
+    # # check to see if this row need manual work
+    # if row_val['B'] == None:
+    #     check_info["col"].append('B')
+    # if row_val['F'] == None or int(row_val['F']) > price_check:
+    #     check_info["col"].append('F')
+    # # if manual needed put it queue
+    # if len(check_info["col"] > 0):
+    #     check_needed.append(check_info)
+    #     # TODO
+    #     # if GUI not running ----> run it
+    #     gui_check()
+    #     # let user check while automation is running
 
 
 wb.save(path_result_xls)
 
-# Now implement this csv to template xlsx
 '''
     What tpe of info require manual work
     for now
