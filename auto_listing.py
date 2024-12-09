@@ -24,7 +24,7 @@ img_size = 500
 stock_name = 'CN_JUN'  # stock_code = f'{stock_name}{stock_no:04}'
 stock_no = 1
 item_count = 10
-price_check = 3000  # if price is suspiciously high call for manual check
+
 
 # User's input
 while (True):
@@ -39,7 +39,8 @@ code_prefix = input(
 
 # resize entire folder of image and save to jpg format (acceptable format for chatGpt) return path of the result folder
 def batch_resize_imgs(folder_path: Path, img_size: int) -> Path:
-    result_folder = folder_path / 'result'
+    result_folder = folder_path / \
+        ('result_'+datetime.now().strftime(r'%d%m%y_%H%M%S'))
     result_folder.mkdir(exist_ok=True)
     for item in folder_path.iterdir():
         try:
@@ -275,11 +276,12 @@ def img_rename(img: Path, code_list: list) -> dict:
     duplicated = False
     if (list[0]):
         new_img = img.parent / ('_'.join(list) + img.suffix)
-    else:
-        new_img = img
-    if new_img.exists():
-        new_img = new_img.parent / (new_img.stem + '_dup' + new_img.suffix)
-        duplicated = True
+    while (new_img.exists()):
+        if (str(new_img) != str(img)):  # in case file got named before
+            new_img = new_img.parent / (new_img.stem + '_dup' + new_img.suffix)
+            duplicated = True
+        else:
+            break
     img.rename(str(new_img))
     return_val = {
         'path': new_img,
