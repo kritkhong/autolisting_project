@@ -283,7 +283,7 @@ def is_similar_img(img1: Path, img2: Path) -> bool:
     return ((hash0 - hash1) < cutoff)
 
 
-def img_rename(img: Path, code_list: list) -> dict:
+def img_rename(img: Path, code_list: list) -> Path:
     list = natsorted(code_list)
     duplicated = False
     if (list[0]):
@@ -293,19 +293,15 @@ def img_rename(img: Path, code_list: list) -> dict:
             if (is_similar_img(new_img, img)):  # same images
                 new_img = new_img.parent / \
                     (new_img.stem + ' copy' + new_img.suffix)
-                duplicated = True
             else:  # user use same code for different images for any reason
                 new_img = new_img.parent / \
-                    (new_img.stem + '_' + new_img.suffix)
+                    (new_img.stem + '*' +
+                     new_img.suffix)  # put * for renaming file not overwrite other file with same code
 
         else:  # rename to its own name
             break
     img.rename(str(new_img))
-    return_val = {
-        'path': new_img,
-        'duplicated': duplicated,
-    }
-    return return_val
+    return new_img
 
 
 ## MAIN FUCTION ##
@@ -319,6 +315,7 @@ ocr = PaddleOCR(lang='en', show_log=False)
 # batch_resize_imgs return path of the result folder
 imgs_dir = batch_resize_imgs(dir_path, img_size)
 listing = []
+code_repeat = {}
 for img in imgs_dir.iterdir():
     print(img)
     if (img.suffix == '.xlsx'):
@@ -326,14 +323,24 @@ for img in imgs_dir.iterdir():
 
     cp_list = read_code_price(img, code_prefix, ocr)
     code_list = [code for code, price in cp_list]
+
     # image have code(s) --> rename img, create caption(s), put info in listing
     if cp_list:
-        rename = img_rename(img, code_list)
-        img = rename['path']
-        if not rename['duplicated']:
+        img = img_rename(img, code_list)
+        if ' copy' not in img.stem:  # non duplicate img file
             caption_dict = create_caption(img, code_list)
             for code, price in cp_list:
-                listing.append([code, caption_dict[code], price])
+                if (code not in code_repeat.keys()):
+                    code_repeat[code] = 1
+                    new_code = code
+                else:
+                    code_repeat[code] += 1
+                    new_code = code + '_' + str(code_repeat[code])
+                    new_file_path = img.parent / \
+                        img.name.replace('*', '').replace(code, new_code)
+                    img = img.rename(str(new_file_path))
+
+                listing.append([new_code, caption_dict[code], price])
     # image doesn't contain code --> ignore
     else:
         continue
