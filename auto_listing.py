@@ -5,6 +5,7 @@ import base64
 import json
 import shutil
 import math
+import imagehash
 from collections import deque
 from natsort import natsorted
 from datetime import datetime
@@ -21,7 +22,8 @@ import csv  # temporary
 
 # Adjustable variable
 img_size = 500
-stock_name = 'CN_JUN'  # stock_code = f'{stock_name}{stock_no:04}'
+# stock_code = f'{stock_name}{stock_no:04}'
+stock_name = datetime.now().strftime(r'%d%m%y')
 stock_no = 1
 item_count = 10
 
@@ -106,7 +108,7 @@ def read_code_price(item: Path, code_prefix: str, ocr, draw=False) -> list:
                 price_list.append([box_loc, match.group()])
                 # trim that code out of the string
                 str = str[:match.start()] + ' ' + str[match.end():]
-    if draw:
+    if draw and price_list:
         for box, price in price_list:
             draw_box(box, 'PRICE', (3, 252, 15), item)
 
@@ -116,22 +118,25 @@ def read_code_price(item: Path, code_prefix: str, ocr, draw=False) -> list:
     for box_c, code in code_list:
         if draw:
             draw_box(box_c, 'CODE', (3, 252, 252), item)
-        x1 = [p[0] for p in box_c]
-        y1 = [p[1] for p in box_c]
-        code_center = [sum(x1)/4, sum(y1)/4]
-        min_dist = float('inf')
-        pair_price = []
-        for box_p, price in price_list:
-            x2 = [p[0] for p in box_p]
-            y2 = [p[1] for p in box_p]
-            price_center = [sum(x2)/4, sum(y2)/4]
-            distance = math.dist(code_center, price_center)
-            if distance < min_dist:
-                min_dist = distance
-                pair_price = [price_center, price]
-        if draw:
-            draw_line(code_center, pair_price[0], item)
-        output.append([code, pair_price[1]])
+        if price_list:
+            x1 = [p[0] for p in box_c]
+            y1 = [p[1] for p in box_c]
+            code_center = [sum(x1)/4, sum(y1)/4]
+            min_dist = float('inf')
+            pair_price = []
+            for box_p, price in price_list:
+                x2 = [p[0] for p in box_p]
+                y2 = [p[1] for p in box_p]
+                price_center = [sum(x2)/4, sum(y2)/4]
+                distance = math.dist(code_center, price_center)
+                if distance < min_dist:
+                    min_dist = distance
+                    pair_price = [price_center, price]
+            if draw:
+                draw_line(code_center, pair_price[0], item)
+            output.append([code, pair_price[1]])
+        else:
+            output.append([code, None])
 
     # return in list of [code, price]
     # [ [code1,price1], [code2,price2], ... ]
@@ -160,9 +165,9 @@ def draw_line(a: list, b: list, img: Path):
 
 
 def single_caption(item: Path) -> str:
-    ##### FOR TESTING #####
-    return "--test caption--"
-    #######################
+    # ##### FOR TESTING #####
+    # return "--test caption--"
+    # #######################
 
     img_path = str(item)
     with open(img_path, "rb") as image_file:
@@ -210,12 +215,12 @@ def single_caption(item: Path) -> str:
 
 
 def multi_captions(item: Path, code_list: list) -> dict:
-    ##### FOR TESTING #####
-    test_dict = {}
-    for code in code_list:
-        test_dict[code] = "--test caption--"
-    return test_dict
-    #######################
+    # ##### FOR TESTING #####
+    # test_dict = {}
+    # for code in code_list:
+    #     test_dict[code] = "--test caption--"
+    # return test_dict
+    # #######################
     img_path = str(item)
     with open(img_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
@@ -271,16 +276,29 @@ def json_trim(string: str) -> str:
     return match.group()
 
 
+def is_similar_img(img1: Path, img2: Path) -> bool:
+    hash0 = imagehash.average_hash(Image.open(img1))
+    hash1 = imagehash.average_hash(Image.open(img2))
+    cutoff = 5  # maximum bits that could be different between the hashes.
+    return ((hash0 - hash1) < cutoff)
+
+
 def img_rename(img: Path, code_list: list) -> dict:
     list = natsorted(code_list)
     duplicated = False
     if (list[0]):
         new_img = img.parent / ('_'.join(list) + img.suffix)
     while (new_img.exists()):
-        if (str(new_img) != str(img)):  # in case file got named before
-            new_img = new_img.parent / (new_img.stem + '_dup' + new_img.suffix)
-            duplicated = True
-        else:
+        if (str(new_img) != str(img)):  # other file having this name(code) already exist
+            if (is_similar_img(new_img, img)):  # same images
+                new_img = new_img.parent / \
+                    (new_img.stem + ' copy' + new_img.suffix)
+                duplicated = True
+            else:  # user use same code for different images for any reason
+                new_img = new_img.parent / \
+                    (new_img.stem + '_' + new_img.suffix)
+
+        else:  # rename to its own name
             break
     img.rename(str(new_img))
     return_val = {
@@ -306,7 +324,7 @@ for img in imgs_dir.iterdir():
     if (img.suffix == '.xlsx'):
         continue
 
-    cp_list = read_code_price(img, code_prefix, ocr, draw=True)
+    cp_list = read_code_price(img, code_prefix, ocr)
     code_list = [code for code, price in cp_list]
     # image have code(s) --> rename img, create caption(s), put info in listing
     if cp_list:
@@ -375,7 +393,7 @@ wb.save(path_result_xls)
     to consider
     1. Multi-caption
     2. Too expensive? >2,000
-    '''
+'''
 # if the img need Manual work in GUI as condition above
 # Create manual work LIST might contain ---> file_path, info_list, position in xlsx
 # skip renaming? if no code
