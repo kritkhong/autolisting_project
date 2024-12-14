@@ -17,9 +17,6 @@ from openai import OpenAI
 from openpyxl import load_workbook
 
 
-import csv  # temporary
-
-
 # Adjustable variable
 img_size = 500
 # stock_code = f'{stock_name}{stock_no:04}'
@@ -57,14 +54,14 @@ def batch_resize_imgs(folder_path: Path, img_size: int) -> Path:
     return result_folder
 
 
-def create_caption(item: Path, code_list: list) -> list:
+def create_caption(item: Path, code_list: list, dummy=False) -> list:
     output = {}
     if len(code_list) == 1:
-        caption = single_caption(item)
+        caption = single_caption(item, dummy)
         output[code_list[0]] = caption
 
     elif len(code_list) > 1:
-        captions = multi_captions(item, code_list)
+        captions = multi_captions(item, code_list, dummy)
         for code in code_list:
             try:
                 output[code] = captions[code]
@@ -164,10 +161,11 @@ def draw_line(a: list, b: list, img: Path):
         return 1
 
 
-def single_caption(item: Path) -> str:
-    # ##### FOR TESTING #####
-    # return "--test caption--"
-    # #######################
+def single_caption(item: Path, dummy: bool) -> str:
+    ##### FOR TESTING #####
+    if dummy:
+        return "--test caption--"
+    #######################
 
     img_path = str(item)
     with open(img_path, "rb") as image_file:
@@ -214,13 +212,14 @@ def single_caption(item: Path) -> str:
     return caption
 
 
-def multi_captions(item: Path, code_list: list) -> dict:
-    # ##### FOR TESTING #####
-    # test_dict = {}
-    # for code in code_list:
-    #     test_dict[code] = "--test caption--"
-    # return test_dict
-    # #######################
+def multi_captions(item: Path, code_list: list, dummy: bool) -> dict:
+    ##### FOR TESTING #####
+    if dummy:
+        test_dict = {}
+        for code in code_list:
+            test_dict[code] = "--test caption--"
+        return test_dict
+    #######################
     img_path = str(item)
     with open(img_path, "rb") as image_file:
         base64_image = base64.b64encode(image_file.read()).decode('utf-8')
@@ -285,7 +284,6 @@ def is_similar_img(img1: Path, img2: Path) -> bool:
 
 def img_rename(img: Path, code_list: list) -> Path:
     list = natsorted(code_list)
-    duplicated = False
     if (list[0]):
         new_img = img.parent / ('_'.join(list) + img.suffix)
     while (new_img.exists()):
@@ -328,7 +326,8 @@ for img in imgs_dir.iterdir():
     if cp_list:
         img = img_rename(img, code_list)
         if ' copy' not in img.stem:  # non duplicate img file
-            caption_dict = create_caption(img, code_list)
+            # <---- create dummy caption for testing change to False in real work
+            caption_dict = create_caption(img, code_list, dummy=False)
             for code, price in cp_list:
                 if (code not in code_repeat.keys()):
                     code_repeat[code] = 1
@@ -390,23 +389,3 @@ for info in listing:
 
 
 wb.save(path_result_xls)
-
-'''
-    What tpe of info require manual work
-    for now
-    1. No price
-    2. No code
-
-    to consider
-    1. Multi-caption
-    2. Too expensive? >2,000
-'''
-# if the img need Manual work in GUI as condition above
-# Create manual work LIST might contain ---> file_path, info_list, position in xlsx
-# skip renaming? if no code
-# Queue the human work in LIST?
-# Show img in GUI with highlight what's need attention
-# back to rename
-# edit xlsx
-
-# ________DONE FOR NOW_________
